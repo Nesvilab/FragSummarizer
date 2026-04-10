@@ -528,8 +528,17 @@ public class FragSummarizer {
                 + ".chart-cell svg { width: 100%; height: auto; display: block; }\n"
                 + ".total-badge { display: inline-block; background: #fff3f3; border: 1px solid #e74c3c;\n"
                 + "  border-radius: 6px; padding: 4px 12px; font-weight: 600; color: #e74c3c; float: right; }\n"
-                + ".img-row { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; align-items: flex-start; }\n"
-                + ".img-row img { max-width: 48%; height: auto; object-fit: contain; border: 1px solid #eee; border-radius: 4px; }\n"
+                + ".sub-heading { font-size: 15px; font-weight: 600; color: #444; margin: 22px 0 12px;\n"
+                + "  padding: 6px 0 6px 10px; border-left: 3px solid #A0E7E5; background: #f8fdfd; }\n"
+                + ".msb-grid { display: flex; flex-direction: column; gap: 18px; margin-top: 4px; }\n"
+                + ".msb-card { background: #fafcfd; border: 1px solid #e4ecef; border-radius: 8px;\n"
+                + "  padding: 14px 14px 10px; display: flex; flex-direction: column; align-items: center;\n"
+                + "  transition: box-shadow 0.2s ease, transform 0.2s ease; }\n"
+                + ".msb-card:hover { box-shadow: 0 6px 16px rgba(0,0,0,0.08); transform: translateY(-2px); }\n"
+                + ".msb-card img { width: 100%; max-width: 820px; height: auto; object-fit: contain;\n"
+                + "  border-radius: 4px; background: #fff; }\n"
+                + ".msb-card figcaption { margin-top: 10px; font-size: 12px; color: #555;\n"
+                + "  font-weight: 600; text-align: center; letter-spacing: 0.2px; }\n"
                 + "@media print { .page { box-shadow: none; margin: 0; page-break-after: always; } }\n"
                 + "</style>\n</head>\n<body>\n";
     }
@@ -777,16 +786,44 @@ public class FragSummarizer {
         // MSBooster images
         List<String> paths = msboosterPlotPaths.get(runName);
         if (paths != null && !paths.isEmpty()) {
-            sb.append("<div class=\"img-row\">\n");
-            for (String imgPath : paths) {
+            List<String> sorted = new ArrayList<>(paths);
+            sorted.sort(Comparator.comparingInt(FragSummarizer::msboosterPlotOrder));
+
+            sb.append("<h3 class=\"sub-heading\">MSBooster Plots</h3>\n");
+            sb.append("<div class=\"msb-grid\">\n");
+            for (String imgPath : sorted) {
                 String b64 = imageToBase64(imgPath);
-                if (b64 != null) sb.append("<img src=\"data:image/png;base64,").append(b64).append("\" alt=\"MSBooster plot\">\n");
+                if (b64 == null) continue;
+                String label = msboosterPlotLabel(imgPath);
+                sb.append("<figure class=\"msb-card\">\n");
+                sb.append("<img src=\"data:image/png;base64,").append(b64)
+                        .append("\" alt=\"").append(esc(label)).append("\">\n");
+                sb.append("<figcaption>").append(esc(label)).append("</figcaption>\n");
+                sb.append("</figure>\n");
             }
             sb.append("</div>\n");
         }
 
         sb.append("</div>\n");
         return sb.toString();
+    }
+
+    private static String msboosterPlotLabel(String path) {
+        String name = path.replace('\\', '/').toLowerCase();
+        if (name.contains("rt_calibration_curves")) return "RT Calibration Curve";
+        if (name.contains("delta_rt_loess")) return "Delta RT (LOESS)";
+        if (name.contains("pred_rt_real_units")) return "Predicted vs. Observed RT";
+        if (name.contains("unweighted_spectral_entropy")) return "Unweighted Spectral Entropy";
+        return "MSBooster Plot";
+    }
+
+    private static int msboosterPlotOrder(String path) {
+        String name = path.replace('\\', '/').toLowerCase();
+        if (name.contains("rt_calibration_curves")) return 0;
+        if (name.contains("delta_rt_loess")) return 1;
+        if (name.contains("pred_rt_real_units")) return 2;
+        if (name.contains("unweighted_spectral_entropy")) return 3;
+        return 99;
     }
 
     // ============================================================
