@@ -5,8 +5,8 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>org.nesvilab</groupId>
-    <artifactId>fragsummarizer</artifactId>
-    <version>1.0.0</version>
+    <artifactId>FragSummarizer</artifactId>
+    <version>1.0.1</version>
     <packaging>jar</packaging>
 
     <name>FragSummarizer</name>
