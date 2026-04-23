@@ -57,6 +57,11 @@ public class FragSummarizer {
     private static final int ML = 55, MR = 20, MT = 35, MB = 45;
     private static final String GRAY = "#696969";
 
+    // Cap for a single CSV/TSV field. FragPipe's `Mapped Proteins` column can run into the
+    // tens of thousands of characters when a peptide maps to many accessions, which blows past
+    // the univocity-parsers default of 4096.
+    private static final int MAX_CHARS_PER_COLUMN = 16 * 1024 * 1024;
+
     public FragSummarizer(String resultsPath) {
         this.resultsPath = resultsPath;
         this.runtimeDict = new LinkedHashMap<>();
@@ -129,7 +134,7 @@ public class FragSummarizer {
 
         if (manifestPath != null) {
             try {
-                manifestData = Table.read().csv(CsvReadOptions.builder(manifestPath).separator('\t').header(false).build());
+                manifestData = Table.read().csv(CsvReadOptions.builder(manifestPath).separator('\t').header(false).maxCharsPerColumn(MAX_CHARS_PER_COLUMN).build());
                 convertTextToString(manifestData);
                 manifestData.column(0).setName("Spectrum File");
                 manifestData.column(1).setName("Experiment");
@@ -197,7 +202,7 @@ public class FragSummarizer {
 
     private void readIdsPerRunFromPsm() {
         try {
-            Table psmDf = Table.read().csv(CsvReadOptions.builder(Path.of(resultsPath, "psm.tsv").toString()).separator('\t').build());
+            Table psmDf = Table.read().csv(CsvReadOptions.builder(Path.of(resultsPath, "psm.tsv").toString()).separator('\t').maxCharsPerColumn(MAX_CHARS_PER_COLUMN).build());
             convertTextToString(psmDf);
 
             StringColumn rawFileCol = StringColumn.create("raw_file");
@@ -321,7 +326,7 @@ public class FragSummarizer {
             List<String[]> pairs = getExpPaths("psm.tsv");
             for (String[] pair : pairs) {
                 if (!Files.exists(Path.of(pair[1]))) continue;
-                Table psmDf = Table.read().csv(CsvReadOptions.builder(pair[1]).separator('\t').build());
+                Table psmDf = Table.read().csv(CsvReadOptions.builder(pair[1]).separator('\t').maxCharsPerColumn(MAX_CHARS_PER_COLUMN).build());
                 convertTextToString(psmDf);
 
                 if (psmDf.columnNames().contains("Retention")) {
@@ -1415,7 +1420,7 @@ public class FragSummarizer {
 
     private int countLines(String filename, String exp) {
         try {
-            Table t = Table.read().csv(CsvReadOptions.builder(filename).separator('\t').build());
+            Table t = Table.read().csv(CsvReadOptions.builder(filename).separator('\t').maxCharsPerColumn(MAX_CHARS_PER_COLUMN).build());
             convertTextToString(t);
             if (!exp.isEmpty() && t.columnNames().contains("Peptide Length")
                     && t.columnNames().contains("Charge") && t.columnNames().contains("Number of Missed Cleavages")) {
