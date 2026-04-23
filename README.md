@@ -20,7 +20,7 @@ The shaded, runnable JAR is written to `target/FragSummarizer-<version>.jar`.
 ## Usage
 
 ```bash
-java -jar target/FragSummarizer-1.0.1.jar -r <fragpipe_results_path>
+java -jar target/FragSummarizer-1.0.2.jar -r <fragpipe_results_path>
 ```
 
 | Flag | Description |
