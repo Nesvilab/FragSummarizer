@@ -148,12 +148,14 @@ public class FragSummarizer {
         }
 
         try {
+            Boolean speclibgenOn = null, fragspeclibOn = null;
             for (String line : Files.readAllLines(Path.of(resultsPath, latestLogFile))) {
-                if (line.startsWith("speclibgen.run-speclibgen")) {
-                    runSpecLib = !line.split("run-speclibgen=")[1].trim().equals("false");
-                    break;
-                }
+                if (line.startsWith("speclibgen.run-speclibgen="))
+                    speclibgenOn = !line.split("=", 2)[1].trim().equals("false");
+                else if (line.startsWith("fragspeclib.run-fragspeclib="))
+                    fragspeclibOn = !line.split("=", 2)[1].trim().equals("false");
             }
+            runSpecLib = Boolean.TRUE.equals(speclibgenOn) || Boolean.TRUE.equals(fragspeclibOn);
         } catch (IOException e) { throw new RuntimeException("Failed to read log", e); }
 
         readMsboosterPlots();
