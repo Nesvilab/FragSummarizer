@@ -47,6 +47,7 @@ public class FragSummarizer {
     private Map<String, List<String>> msboosterPlotPaths;
 
     private Boolean runSpecLib;
+    private Boolean msboosterEnabled;
     private String latestLogFile;
     private Double ms1Tolerance;
     private Double ms2Tolerance;
@@ -61,6 +62,18 @@ public class FragSummarizer {
     // tens of thousands of characters when a peptide maps to many accessions, which blows past
     // the univocity-parsers default of 4096.
     private static final int MAX_CHARS_PER_COLUMN = 16 * 1024 * 1024;
+
+    // MSBooster output layout. FragPipe writes MSBooster results into the per-experiment subfolder
+    // (`<results>/<experiment>/MSBooster`) and only into the results root when the manifest assigns
+    // neither an experiment nor a bioreplicate.
+    private static final String MSBOOSTER_DIR = "MSBooster";
+    private static final String MSBOOSTER_PLOTS_DIR = "MSBooster_plots";
+    private static final String RT_CALIBRATION_DIR = "RT_calibration_curves";
+    private static final String CALIBRATED_SUFFIX = "_calibrated";
+    private static final String EDITED_MARKER = "_edited";
+    private static final String PNG_SUFFIX = ".png";
+    /** Directory levels below the results root searched by the fallback MSBooster scan. */
+    private static final int MSBOOSTER_SCAN_DEPTH = 3;
 
     public FragSummarizer(String resultsPath) {
         this.resultsPath = resultsPath;
@@ -154,6 +167,8 @@ public class FragSummarizer {
                     speclibgenOn = !line.split("=", 2)[1].trim().equals("false");
                 else if (line.startsWith("fragspeclib.run-fragspeclib="))
                     fragspeclibOn = !line.split("=", 2)[1].trim().equals("false");
+                else if (line.startsWith("msbooster.run-msbooster="))
+                    msboosterEnabled = !line.split("=", 2)[1].trim().equals("false");
             }
             runSpecLib = Boolean.TRUE.equals(speclibgenOn) || Boolean.TRUE.equals(fragspeclibOn);
         } catch (IOException e) { throw new RuntimeException("Failed to read log", e); }
@@ -179,27 +194,100 @@ public class FragSummarizer {
     }
 
     private void readMsboosterPlots() {
-        Path msboosterDir = Path.of(resultsPath, "MSBooster", "MSBooster_plots");
-        if (!Files.exists(msboosterDir)) return;
+        List<Path> plotDirs = findMsboosterPlotDirs();
+        if (plotDirs.isEmpty()) {
+            if (Boolean.TRUE.equals(msboosterEnabled))
+                System.err.println("Warning: MSBooster was enabled but no " + MSBOOSTER_DIR + "/" + MSBOOSTER_PLOTS_DIR
+                        + " folder was found under " + resultsPath + "; MSBooster pages will be omitted.");
+            return;
+        }
+        for (Path plotDir : plotDirs) collectMsboosterPlots(plotDir);
+    }
+
+    /** Indexes every included plot under one {@code MSBooster_plots} folder, keyed by run name. */
+    private void collectMsboosterPlots(Path plotDir) {
         try {
-            for (File folder : Objects.requireNonNull(msboosterDir.toFile().listFiles())) {
+            for (File folder : sortedByName(plotDir.toFile().listFiles())) {
                 if (!folder.isDirectory()) continue;
-                for (File file : Objects.requireNonNull(folder.listFiles())) {
-                    if (!file.getName().endsWith(".png")) continue;
-                    String runName = file.getName().contains("edited")
-                            ? file.getName().split("_edited")[0]
-                            : file.getName().replace(".png", "");
-                    boolean shouldInclude = folder.getName().equals("RT_calibration_curves")
-                            || file.getName().contains("delta_RT_loess")
-                            || file.getName().contains("pred_RT_real_units")
-                            || file.getName().contains("unweighted_spectral_entropy");
-                    if (shouldInclude) {
-                        msboosterPlotPaths.computeIfAbsent(runName, k -> new ArrayList<>())
-                                .add(file.getAbsolutePath());
-                    }
+                for (File file : sortedByName(folder.listFiles())) {
+                    if (!file.getName().endsWith(PNG_SUFFIX)) continue;
+                    if (!isMsboosterPlotIncluded(folder.getName(), file.getName())) continue;
+                    String runName = msboosterRunName(folder.getName(), file.getName());
+                    String absPath = file.getAbsolutePath();
+                    List<String> paths = msboosterPlotPaths.computeIfAbsent(runName, k -> new ArrayList<>());
+                    if (!paths.contains(absPath)) paths.add(absPath);
                 }
             }
-        } catch (Exception e) { System.err.println("Warning: Failed to read MSBooster plots: " + e.getMessage()); }
+        } catch (Exception e) {
+            System.err.println("Warning: Failed to read MSBooster plots in " + plotDir + ": " + e.getMessage());
+        }
+    }
+
+    /** Directory listings are filesystem-ordered; sort by name so the report is reproducible. */
+    private static List<File> sortedByName(File[] files) {
+        if (files == null) return Collections.emptyList();
+        List<File> sorted = new ArrayList<>(Arrays.asList(files));
+        sorted.sort(Comparator.comparing(File::getName));
+        return sorted;
+    }
+
+    /**
+     * Locates every {@code MSBooster/MSBooster_plots} folder produced by this run. The manifest-driven
+     * lookup covers the standard FragPipe layouts; a depth-limited scan of the results tree is the
+     * fallback for layouts the manifest does not describe (e.g. a spectral-library run with experiments).
+     */
+    private List<Path> findMsboosterPlotDirs() {
+        LinkedHashSet<Path> dirs = new LinkedHashSet<>();
+
+        Path rootDir = Path.of(resultsPath, MSBOOSTER_DIR, MSBOOSTER_PLOTS_DIR);
+        if (Files.isDirectory(rootDir)) dirs.add(rootDir);
+
+        if (manifestData != null) {
+            try {
+                for (String[] pair : getExpPaths(Path.of(MSBOOSTER_DIR, MSBOOSTER_PLOTS_DIR).toString())) {
+                    Path expDir = Path.of(pair[1]);
+                    if (Files.isDirectory(expDir)) dirs.add(expDir);
+                }
+            } catch (Exception e) {
+                System.err.println("Warning: Failed to resolve MSBooster folders from the manifest: " + e.getMessage());
+            }
+        }
+
+        if (dirs.isEmpty()) collectMsboosterPlotDirs(Path.of(resultsPath), MSBOOSTER_SCAN_DEPTH, dirs);
+        return new ArrayList<>(dirs);
+    }
+
+    private static void collectMsboosterPlotDirs(Path dir, int depthLeft, Set<Path> found) {
+        if (depthLeft <= 0) return;
+        for (File child : sortedByName(dir.toFile().listFiles(File::isDirectory))) {
+            if (child.getName().equals(MSBOOSTER_DIR)) {
+                Path plots = child.toPath().resolve(MSBOOSTER_PLOTS_DIR);
+                if (Files.isDirectory(plots)) found.add(plots);
+            } else {
+                collectMsboosterPlotDirs(child.toPath(), depthLeft - 1, found);
+            }
+        }
+    }
+
+    private static boolean isMsboosterPlotIncluded(String folderName, String fileName) {
+        return folderName.equals(RT_CALIBRATION_DIR)
+                || fileName.contains("delta_RT_loess")
+                || fileName.contains("pred_RT_real_units")
+                || fileName.contains("unweighted_spectral_entropy");
+    }
+
+    /**
+     * Derives the run a plot belongs to. Score histograms are named after the edited pin file
+     * ({@code <run>_edited_<score>.png}); RT calibration curves are named after the run itself and come
+     * in an uncalibrated and a {@code _calibrated} flavour, both of which belong to the same run.
+     */
+    private static String msboosterRunName(String folderName, String fileName) {
+        String base = fileName.substring(0, fileName.length() - PNG_SUFFIX.length());
+        int editedIdx = base.indexOf(EDITED_MARKER);
+        if (editedIdx >= 0) return base.substring(0, editedIdx);
+        if (folderName.equals(RT_CALIBRATION_DIR) && base.endsWith(CALIBRATED_SUFFIX))
+            return base.substring(0, base.length() - CALIBRATED_SUFFIX.length());
+        return base;
     }
 
     private void readIdsPerRunFromPsm() {
@@ -810,7 +898,8 @@ public class FragSummarizer {
         List<String> paths = msboosterPlotPaths.get(runName);
         if (paths != null && !paths.isEmpty()) {
             List<String> sorted = new ArrayList<>(paths);
-            sorted.sort(Comparator.comparingInt(FragSummarizer::msboosterPlotOrder));
+            sorted.sort(Comparator.<String>comparingInt(FragSummarizer::msboosterPlotOrder)
+                    .thenComparing(FragSummarizer::normalizedPlotPath));
 
             sb.append("<h3 class=\"sub-heading\">MSBooster Plots</h3>\n");
             sb.append("<div class=\"msb-grid\">\n");
@@ -832,8 +921,10 @@ public class FragSummarizer {
     }
 
     private static String msboosterPlotLabel(String path) {
-        String name = path.replace('\\', '/').toLowerCase();
-        if (name.contains("rt_calibration_curves")) return "RT Calibration Curve";
+        String name = normalizedPlotPath(path);
+        if (name.contains(RT_CALIBRATION_DIR.toLowerCase()))
+            return isCalibratedRtCurve(name) ? "RT Calibration Curve (Calibrated)" : "RT Calibration Curve (Uncalibrated)";
+        if (name.contains("delta_rt_loess_real")) return "Delta RT (LOESS, Real Units)";
         if (name.contains("delta_rt_loess")) return "Delta RT (LOESS)";
         if (name.contains("pred_rt_real_units")) return "Predicted vs. Observed RT";
         if (name.contains("unweighted_spectral_entropy")) return "Unweighted Spectral Entropy";
@@ -841,12 +932,21 @@ public class FragSummarizer {
     }
 
     private static int msboosterPlotOrder(String path) {
-        String name = path.replace('\\', '/').toLowerCase();
-        if (name.contains("rt_calibration_curves")) return 0;
-        if (name.contains("delta_rt_loess")) return 1;
-        if (name.contains("pred_rt_real_units")) return 2;
-        if (name.contains("unweighted_spectral_entropy")) return 3;
+        String name = normalizedPlotPath(path);
+        if (name.contains(RT_CALIBRATION_DIR.toLowerCase())) return isCalibratedRtCurve(name) ? 1 : 0;
+        if (name.contains("delta_rt_loess_real")) return 3;
+        if (name.contains("delta_rt_loess")) return 2;
+        if (name.contains("pred_rt_real_units")) return 4;
+        if (name.contains("unweighted_spectral_entropy")) return 5;
         return 99;
+    }
+
+    private static String normalizedPlotPath(String path) {
+        return path.replace('\\', '/').toLowerCase();
+    }
+
+    private static boolean isCalibratedRtCurve(String normalizedPath) {
+        return normalizedPath.endsWith(CALIBRATED_SUFFIX + PNG_SUFFIX);
     }
 
     // ============================================================
